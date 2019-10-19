@@ -3,22 +3,60 @@ import subprocess
 import requests
 from bs4 import BeautifulSoup
 import datetime
-initialBeginTime = 12*60
+initialBeginTime = 11*60
 initialEndTime = 20*60
 spicaAdjust = 0
+fullRun = True
+#fullRun = False
 slagalicaChannel = "https://www.youtube.com/user/SlagalicaRTS/videos"
 logFile = "kzzlog.txt"
 beginPic = "begin.bmp"
 introFile = "intro25fix.mp4"
 endPic = "end2.bmp"
+logAll = True
+checkForLatestVideo = True
+def resize_frame(frame,w,h):
+    from PIL import Image
+    image = Image.open(frame)
+    newImage = image.resize((w,h),Image.ANTIALIAS)
+    newImage.save("begin"+str(h)+".bmp")
+
+    
+def get_video_resolution(href):
+    command = 'ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 '+href+".mp4"
+    log(command)
+    process, processOutput = run_command(command)
+    #counter = 0
+    #reso = ''.split()
+    #while (len(reso) < 2 or counter < 3):
+    #    reso = next(processOutput).decode("utf-8").strip().split(',')
+    #    counter+=1
+    reso = next(processOutput).decode("utf-8").strip().split(',')
+    dim = dict()
+    log("(get_video_resolution) "+str(dim))
+    dim['w'] = reso[0]
+    dim['h'] = reso[1]
+    return dim
+
+
 def stamp_log():
-    with open(logFile,"a") as f:
-        f.write(datetime.datetime.now().ctime() + '\n')
+#    with open(logFile,"a") as f:
+#        f.write(datetime.datetime.now().ctime() + '\n')
+    return '[' +str(datetime.datetime.now().ctime()) + '] '
+def log(msg):
+    msg = stamp_log() + str(msg)
+    print(msg)
+    if logAll:
+        with open(logFile,"a") as f:
+            f.write(str(msg) + '\n')
 def download_video(href):
+    log("Trying to download video")
     href = href.replace("/watch?v=","")
-    command = "youtube-dl.exe https://youtu.be/"+href+" -f mp4 -o "+href+".mp4"
+    href = href.replace("VIDEO","")
+    command = "youtube-dl.exe https://youtu.be/"+href+" -f mp4 -o VIDEO"+href+".mp4"
+    log(command)
     p = os.system(command)
-    if os.path.exists(href+".mp4"):
+    if os.path.exists("VIDEO"+href+".mp4"):
         with open("latestVideo.txt","w") as f:
             f.write(href)
         return href
@@ -29,12 +67,14 @@ def is_latest_video(href):
     href = href.replace("/watch?v=","")
     with open("latestVideo.txt") as f:
         localLatest = f.readline()
-    return localLatest == href
+    return (localLatest == href) and checkForLatestVideo
 
 def get_latest_video_info(channel):
     r = requests.get(channel)
     soup = BeautifulSoup(r.content, 'html.parser')
-    return soup.select_one('.yt-lockup-title a')
+    yt = soup.select_one('.yt-lockup-title a')
+    yt['href'] = "VIDEO"+yt['href']
+    return yt
 
 
 def cut_video(video,begin,end,output):
@@ -49,8 +89,9 @@ def run_command(command):
     return p,iter(p.stdout.readline, b'')
 
 def find_frame_time_command(video,frame):
+    log('ffmpeg.exe -i '+video+' -loop 1 -i '+frame+' -an -filter_complex "blend=difference:shortest=1,blackframe=99:10" -f null -')
     return 'ffmpeg.exe -i '+video+' -loop 1 -i '+frame+' -an -filter_complex "blend=difference:shortest=1,blackframe=99:10" -f null -'
-
+    
 def find_frame_time(video,frame):
     last = None
     process, processOutput = run_command(find_frame_time_command(video,frame))
@@ -66,12 +107,25 @@ def find_frame_time(video,frame):
     return time
 def final_cut(href):
     href = href.replace("/watch?v=","")
+    dim = get_video_resolution(href)
+    log(dim)
+    if not os.path.exists("begin"+str(dim['h'])+".bmp"):
+        log("FOUND NEW RESOULTION")
+        resize_frame("begin.bmp",dim['w'],dim['h'])
+        beginPic = "begin"+str(dim['h'])+".bmp"
+        resize_frame("end.bmp",dim['w'],dim['h'])
+        endPic = "end"+str(dim['h'])+".bmp"
+    else:
+        beginPic = "begin"+str(dim['h'])+".bmp"
+        endPic = "end"+str(dim['h'])+".bmp"
     if not os.path.exists("initialCut"+href+".mp4"):
         cut_video(href+".mp4",initialBeginTime,initialEndTime,"initialCut"+href+".mp4")
-        print("Uspeo da sasecem inicijalni")
+        log("Uspeo da sasecem inicijalni")
+    else:
+        log("Inicijalni vec postoji")
     if os.path.exists("initialCut"+href+".mp4"):
         finalBegin = find_frame_time("initialCut"+href+".mp4",beginPic)
-        print("trazim final begin i on je ",finalBegin)
+        log("trazim final begin i on je "+str(finalBegin))
         if finalBegin is not None:
             if spicaAdjust != 0:
                 finalBegin = str( float(finalBegin) - spicaAdjust)
@@ -87,12 +141,14 @@ def clean_up(href):
         os.system("del initialCut"+href+".mp4")
     if os.path.exists("secondCut"+href+".mp4"):
         os.system("del secondCut"+href+".mp4")
-    if os.path.exists(href+".mp4"):
-        os.system("del "+href+".mp4")
+    if os.path.exists("final"+href+".mp4"):
+        os.system("move secondCut"+href+".mp4 Earlier/")
+    if os.path.exists("introfinal"+href+".mp4"):
+        os.system("del introfinal"+href+".mp4")
     if ((not os.path.exists("initialCut"+href+".mp4")) and (not os.path.exists("secondCut"+href+".mp4")) and (not os.path.exists(href+".mp4"))):
-        print("Cleanup complete")
+        log("Cleanup complete")
     else:
-        print("Couldn't clean up")
+        log("Couldn't clean up")
 def main():
     ytLatest = get_latest_video_info(slagalicaChannel)
     if not is_latest_video(ytLatest["href"]):
@@ -101,21 +157,22 @@ def main():
             if not os.path.exists("final"+ytLatest["href"].replace("/watch?v=","")+".mp4"):
                 final_cut(ytLatest["href"])
                 if os.path.exists("final"+ytLatest["href"].replace("/watch?v=","")+".mp4"):
-                    stamp_log()
+                    #stamp_log()
                     add_intro(ytLatest["href"])
-                    print("Success")
-                    clean_up(ytLatest["href"])
-                    #post_to_facebook(ytLatest)
+                    log("Success")
+                    log("Posting to facebook")
+                    post_to_facebook(ytLatest)
+                    #clean_up(ytLatest["href"])
             else:
-                print("File already exists " + ytLatest["href"].replace("/watch?v=",""))
+                log("File already exists " + str(ytLatest["href"].replace("/watch?v=","")))
                 if not os.path.exists("introfinal"+ytLatest["href"].replace("/watch?v=","")+".mp4"):
                         add_intro(ytLatest["href"])
-                        print("added intro")
+                        log("added intro")
 
         else:
-            print("Failure to download the video")
+            log("Failure to download the video")
     else:
-        print("Already have the latest video")
+        log("Already have the latest video")
 def add_intro(href):
     href = href.replace("/watch?v=","")
     command = "(echo file '" + introFile + "' & echo file 'final"+href+".mp4' )>list.txt"
@@ -136,6 +193,11 @@ def post_to_facebook(ytLatest):
     linkToModal = login['linkToModal']
     videoPath = login['videoPath']
     speed = 5
+    ytLatest['href'] = ytLatest['href'].replace("/watch?v=","")
+    print(ytLatest['href'])
+    if not os.path.exists("introfinal"+ytLatest['href']+".mp4"):
+        log("Ne postoji video")
+        return
     if usr:
         options = Options()
         #options.add_argument("--headless")
@@ -150,20 +212,21 @@ def post_to_facebook(ytLatest):
         login_button = driver.find_element_by_id('loginbutton')
         login_button.submit()
         sleep(speed)
-        print("logged in")
+        log("logged in")
         driver.get(linkToModal)
         sleep(speed)
-        print("Uploading")
-        give = driver.find_element_by_xpath("//input[@type='file']")
+        log("Uploading")
+        give = driver.find_element_by_xpath("//input[@data-testid='media-attachment-add-photo']")
         href = ytLatest
+        log("give.send_keys(" + videoPath+"introfinal"+ytLatest["href"].replace("/watch?v=","")+".mp4")
         give.send_keys(videoPath+"introfinal"+ytLatest["href"].replace("/watch?v=","")+".mp4")
         #Wait for wall
-        sleep(speed)
+        sleep(speed*5)
         naslov = ytLatest['title']
-        description = "https://www.youtube.com"+ytLatest['href']
+        description = naslov + " https://www.youtube.com"+ytLatest['href'].replace("VIDEO","")
         title = driver.find_element_by_xpath("//input[@placeholder='Add a title for your video here...']")
         title.send_keys(naslov)
-        title.send_keys(Keys.TAB, Keys.TAB, description)
+        title.send_keys(Keys.TAB,Keys.TAB, description)
 
         sleep(speed)
         btn = driver.find_element_by_xpath("//*[@data-testid='VIDEO_COMPOSER_NEXT_BUTTON']")
@@ -171,11 +234,15 @@ def post_to_facebook(ytLatest):
         sleep(speed*3)
         btn2 = driver.find_element_by_xpath("//*[@data-testid='VIDEO_COMPOSER_PUBLISH_BUTTON']")
         btn2.click()
-        print("finished")
+        log("finished")
         sleep(speed*3)
         driver.close()
     return True    
-main()
+if fullRun:
+    main()
+else:
+    p = post_to_facebook
+    l = get_latest_video_info(slagalicaChannel)
 
 
 
